@@ -24,6 +24,15 @@ Built for TypeScript and Python projects, one model, GitHub through `gh`.
 
 ## Quick start
 
+**Let your agent install it (global).** Once the repo is public, tell opencode:
+
+> Fetch and follow instructions from https://raw.githubusercontent.com/apLanka/branchwright/refs/heads/main/.opencode/INSTALL.md
+
+The agent checks the prerequisites, asks you to confirm a global install, clones the repo to `~/.local/share/branchwright`, backs up your opencode config, runs the installer (or merges the settings into an `opencode.jsonc` by hand), and tells you to restart. The instructions are in [`.opencode/INSTALL.md`](.opencode/INSTALL.md).
+
+**Or install it yourself, into one project:**
+
+
 You need `git`, `bash`, `python3` and [`gh`](https://cli.github.com) (logged in) on your PATH, and opencode V1 1.x or V2 2.0.4+.
 
 ```bash
