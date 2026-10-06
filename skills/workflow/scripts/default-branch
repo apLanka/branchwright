@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Print the repository's default branch name (no remote prefix).
+# Order: origin/HEAD, then origin/main|master, then local main|master,
+# then init.defaultBranch, then the current branch.
+set -uo pipefail
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "default-branch: not a git repository" >&2; exit 2; }
+
+ref=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null) && { echo "${ref#origin/}"; exit 0; }
+for b in main master; do
+  git show-ref --verify --quiet "refs/remotes/origin/$b" && { echo "$b"; exit 0; }
+done
+for b in main master; do
+  git show-ref --verify --quiet "refs/heads/$b" && { echo "$b"; exit 0; }
+done
+d=$(git config --get init.defaultBranch) && [ -n "$d" ] && { echo "$d"; exit 0; }
+git branch --show-current

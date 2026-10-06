@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Repo-level setup for the workflow. Idempotent.
+#   - creates .workflow/ and excludes it from git via info/exclude
+#   - creates docs/agents/ (when --docs is given)
+#   - creates the ready-for-agent label when gh and a GitHub remote are available
+# Usage: setup-repo [--docs] [--no-label]
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+wfs="$here/../../workflow/scripts"
+
+docs=0 label=1
+for a in "$@"; do
+  case "$a" in --docs) docs=1 ;; --no-label) label=0 ;; *) echo "setup-repo: unknown argument $a" >&2; exit 2 ;; esac
+done
+
+"$wfs/task-state" init
+echo "workflow dir: $("$wfs/task-state" root) (excluded via $(git rev-parse --git-path info/exclude))"
+
+top=$(git rev-parse --show-toplevel)
+[ $docs -eq 0 ] || { mkdir -p "$top/docs/agents"; echo "docs dir: docs/agents"; }
+
+if [ $label -eq 1 ] && command -v "${GH_BIN:-gh}" >/dev/null 2>&1 && git remote get-url origin 2>/dev/null | grep -q github.com; then
+  if "${GH_BIN:-gh}" label create ready-for-agent --description "Spec approved; ready for an agent to build" --color 0E8A16 >/dev/null 2>&1; then
+    echo "label: created ready-for-agent"
+  else
+    echo "label: ready-for-agent already exists or could not be created"
+  fi
+else
+  echo "label: skipped (no gh or no GitHub remote)"
+fi

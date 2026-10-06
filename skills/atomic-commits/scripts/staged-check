@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Inspect the staged change before committing one slice.
+# Prints the stat and size, then WARN/ERROR lines.
+# Exit 0: committable (warnings allowed). Exit 1: nothing staged or an ERROR.
+set -uo pipefail
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "staged-check: not a git repository" >&2; exit 2; }
+
+if git diff --staged --quiet; then
+  echo "ERROR nothing is staged"
+  exit 1
+fi
+
+git diff --staged --stat
+read -r added deleted < <(git diff --staged --numstat | awk '{a+=$1; d+=$2} END {print a+0, d+0}')
+total=$((added + deleted))
+files=$(git diff --staged --name-only | wc -l | tr -d ' ')
+echo "size: +$added -$deleted ($total lines) in $files file(s)"
+
+rc=0
+if [ "$total" -gt 300 ]; then
+  echo "WARN $total changed lines: split into smaller slices (aim for about 100)"
+elif [ "$total" -gt 150 ]; then
+  echo "WARN $total changed lines: check whether this is one logical slice (aim for about 100)"
+fi
+
+while IFS= read -r f; do
+  case "$f" in
+    .workflow/*|*/.workflow/*) echo "ERROR workflow state is staged: $f"; rc=1 ;;
+    .env|.env.*|*/.env|*/.env.*|*.pem|*.key|*id_rsa*|*credentials*.json) echo "ERROR possible secret is staged: $f"; rc=1 ;;
+  esac
+done < <(git diff --staged --name-only)
+
+if ! git diff --staged --check >/tmp/staged-check.$$ 2>&1; then
+  echo "WARN whitespace or conflict-marker problems:"
+  head -n 10 /tmp/staged-check.$$
+fi
+rm -f /tmp/staged-check.$$
+
+if [ -n "$(git diff --name-only)" ]; then
+  echo "note: unstaged changes remain (expected when slicing): $(git diff --name-only | tr '\n' ' ')"
+fi
+exit $rc

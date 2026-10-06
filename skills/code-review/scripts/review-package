@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Write a review package (commit list, stat, full diff with context) to a file a
+# reviewer reads in one call, and print its path.
+#
+# Usage: review-package [BASE] [HEAD] [OUTFILE]
+#   BASE default: merge-base of HEAD and the default branch (origin/<default> when present)
+#   HEAD default: HEAD
+#   OUTFILE default: <worktree>/.workflow/review/review-<base7>..<head7>.diff
+# Pass the BASE you recorded, never HEAD~1, so multi-commit work stays whole.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+wfs="$here/../../workflow/scripts"
+
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "review-package: not a git repository" >&2; exit 2; }
+base=${1:-}
+head=${2:-HEAD}
+if [ -z "$base" ]; then
+  default=$("$wfs/default-branch")
+  if git show-ref --verify --quiet "refs/remotes/origin/$default"; then ref="origin/$default"; else ref=$default; fi
+  base=$(git merge-base "$ref" "$head") || { echo "review-package: no merge-base with $ref" >&2; exit 2; }
+fi
+git rev-parse --verify --quiet "$base^{commit}" >/dev/null || { echo "bad BASE: $base" >&2; exit 2; }
+git rev-parse --verify --quiet "$head^{commit}" >/dev/null || { echo "bad HEAD: $head" >&2; exit 2; }
+git merge-base --is-ancestor "$base" "$head" || { echo "HEAD is not a descendant of BASE: ${base}..${head}" >&2; exit 3; }
+[ "$(git rev-list --count "${base}..${head}")" -gt 0 ] || { echo "empty commit range: ${base}..${head}" >&2; exit 3; }
+
+if [ $# -ge 3 ]; then
+  out=$3
+else
+  "$wfs/task-state" init
+  dir="$("$wfs/task-state" root)/review"
+  mkdir -p "$dir"
+  out="$dir/review-$(git rev-parse --short "$base")..$(git rev-parse --short "$head").diff"
+fi
+
+{
+  echo "# Review package: ${base}..${head}"
+  echo
+  echo "## Commits"
+  git log --oneline "${base}..${head}"
+  echo
+  echo "## Files changed"
+  git diff --stat "${base}..${head}"
+  echo
+  echo "## Diff"
+  git diff -U10 "${base}..${head}"
+} > "$out"
+
+echo "wrote ${out}: $(git rev-list --count "${base}..${head}") commit(s), $(wc -c < "$out" | tr -d ' ') bytes"

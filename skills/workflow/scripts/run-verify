@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Run the project's verify commands (test, typecheck, lint) from AGENTS.md.
+#
+# Usage: run-verify [purpose ...]
+#   default purposes: typecheck lint test
+# Exit: 0 when every configured command passed, 1 on the first failure,
+#       3 when AGENTS.md defines none of the requested commands (nothing proven).
+# Output: one "PASS|FAIL <purpose>: <command>" line per command, then the
+# last 40 lines of the failing command's output.
+set -uo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+purposes=("$@")
+[ ${#purposes[@]} -gt 0 ] || purposes=(typecheck lint test)
+
+ran=0
+for p in "${purposes[@]}"; do
+  cmd=$("$here/project-commands" "$p" 2>/dev/null) || continue
+  ran=$((ran + 1))
+  out=$(bash -c "$cmd" 2>&1)
+  rc=$?
+  if [ $rc -eq 0 ]; then
+    echo "PASS $p: $cmd"
+  else
+    echo "FAIL $p: $cmd (exit $rc)"
+    printf '%s\n' "$out" | tail -n 40
+    exit 1
+  fi
+done
+
+if [ $ran -eq 0 ]; then
+  echo "run-verify: AGENTS.md defines none of: ${purposes[*]}" >&2
+  exit 3
+fi
+
+# Record the tree that just passed so the commit gate can skip a re-run.
+if [ $# -eq 0 ]; then
+  top=$(git rev-parse --show-toplevel 2>/dev/null) && {
+    mkdir -p "$top/.workflow"
+    "$here/verify-key" > "$top/.workflow/verified" 2>/dev/null || true
+  }
+fi

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Return to an earlier task's branch: stash dirty work (labelled), archive the
+# current task, check out BRANCH, restore its task.json, and pop its stash.
+#
+# Usage: branch-switch BRANCH
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+wfs="$here/../../workflow/scripts"
+target=${1:?usage: branch-switch BRANCH}
+
+git show-ref --verify --quiet "refs/heads/$target" || { echo "branch-switch: no local branch $target" >&2; exit 1; }
+current=$(git branch --show-current)
+[ "$current" != "$target" ] || { echo "branch-switch: already on $target"; exit 0; }
+
+"$wfs/task-state" init
+if [ -n "$(git status --porcelain)" ]; then
+  s=$("$wfs/task-state" get summary 2>/dev/null || true)
+  [ -n "$s" ] || s="work in progress"
+  label="${current:-detached}: $s"
+  git stash push -u -m "$label" >/dev/null
+  if [ "$("$wfs/task-state" show)" != none ] && [ "$("$wfs/task-state" get branch)" = "$current" ]; then
+    "$wfs/task-state" set "stash=$label"
+  fi
+  echo "stashed=$label"
+fi
+
+"$wfs/task-state" archive
+git switch --quiet "$target"
+if "$wfs/task-state" restore "$target" 2>/dev/null; then
+  label=$("$wfs/task-state" get stash)
+  if [ -n "$label" ]; then
+    ref=$(git stash list --format='%gd%x09%s' | awk -F'\t' -v l="$label" 'index($2, l) { print $1; exit }')
+    if [ -n "$ref" ]; then
+      git stash pop --quiet "$ref" && "$wfs/task-state" set stash= && echo "popped=$label"
+    else
+      echo "branch-switch: warning: stash '$label' not found" >&2
+    fi
+  fi
+else
+  echo "branch-switch: note: no archived task for $target" >&2
+fi
+echo "branch=$target"

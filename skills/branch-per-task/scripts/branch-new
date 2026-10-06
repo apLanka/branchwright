@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Start a task on a new local branch.
+#
+# Usage: branch-new --name BRANCH --summary TEXT --tier N [--stacked] [--worktree DIR]
+#   default base   origin/<default> (local <default> when there is no remote)
+#   --stacked      base on the current branch instead
+#   --worktree DIR create the branch in a new linked worktree at DIR; the current
+#                  checkout is left untouched (no stash)
+# In place: a dirty tree is stashed as "<branch>: <summary>" (git stash push -u),
+# the current task is archived, then the branch is created with no upstream.
+# The branch is never pushed.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+wfs="$here/../../workflow/scripts"
+
+name="" summary="" tier="" stacked=0 wt=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --name) name=$2; shift 2 ;;
+    --summary) summary=$2; shift 2 ;;
+    --tier) tier=$2; shift 2 ;;
+    --stacked) stacked=1; shift ;;
+    --worktree) wt=$2; shift 2 ;;
+    *) echo "branch-new: unknown argument '$1'" >&2; sed -n '2,12p' "$0" >&2; exit 2 ;;
+  esac
+done
+[ -n "$name" ] && [ -n "$summary" ] && [ -n "$tier" ] || { echo "branch-new: --name, --summary and --tier are required" >&2; sed -n '2,12p' "$0" >&2; exit 2; }
+git check-ref-format --branch "$name" >/dev/null 2>&1 || { echo "branch-new: invalid branch name: $name" >&2; exit 2; }
+if git show-ref --verify --quiet "refs/heads/$name"; then echo "branch-new: branch exists: $name" >&2; exit 1; fi
+
+"$wfs/task-state" init
+default=$("$wfs/default-branch")
+current=$(git branch --show-current)
+
+if [ $stacked -eq 1 ]; then
+  [ -n "$current" ] || { echo "branch-new: cannot stack on a detached HEAD" >&2; exit 1; }
+  base=$current
+else
+  if git remote get-url origin >/dev/null 2>&1; then
+    git fetch --quiet origin 2>/dev/null || echo "branch-new: warning: fetch failed, using last known origin/$default" >&2
+  fi
+  if git show-ref --verify --quiet "refs/remotes/origin/$default"; then base="origin/$default"
+  elif git show-ref --verify --quiet "refs/heads/$default"; then base=$default
+  else echo "branch-new: no base branch found for default '$default'" >&2; exit 1; fi
+fi
+
+if [ -n "$wt" ]; then
+  git worktree add --quiet --no-track -b "$name" "$wt" "$base"
+  (cd "$wt" && "$wfs/task-state" init && "$wfs/task-state" start --branch "$name" --base "$base" --summary "$summary" --tier "$tier")
+  echo "worktree=$(cd "$wt" && pwd -P)"
+  echo "branch=$name"
+  echo "base=$base"
+  exit 0
+fi
+
+if [ -n "$(git status --porcelain)" ]; then
+  old_summary=$("$wfs/task-state" get summary 2>/dev/null || true)
+  [ -n "$old_summary" ] || old_summary="work in progress"
+  label="${current:-detached}: $old_summary"
+  git stash push -u -m "$label" >/dev/null
+  if [ "$("$wfs/task-state" show)" != none ] && [ "$("$wfs/task-state" get branch)" = "$current" ]; then
+    "$wfs/task-state" set "stash=$label"
+  fi
+  echo "stashed=$label"
+fi
+
+git switch --quiet --no-track -c "$name" "$base"
+"$wfs/task-state" start --branch "$name" --base "$base" --summary "$summary" --tier "$tier"
+echo "branch=$name"
+echo "base=$base"

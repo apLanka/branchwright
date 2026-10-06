@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Report the git and task state needed to decide stay / stacked / new branch.
+# Prints key=value lines; makes no changes.
+set -uo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+wfs="$here/../../workflow/scripts"
+
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "branch-decide: not a git repository" >&2; exit 2; }
+default=$("$wfs/default-branch")
+current=$(git branch --show-current)
+echo "default=$default"
+echo "current=${current:-"(detached)"}"
+if [ "$current" = "$default" ]; then echo "on_default=yes"; else echo "on_default=no"; fi
+
+if git remote get-url origin >/dev/null 2>&1; then echo "remote=yes"; else echo "remote=no"; fi
+
+dirty=$(git status --porcelain | wc -l | tr -d ' ')
+echo "dirty_files=$dirty"
+
+base_ref=""
+if git show-ref --verify --quiet "refs/remotes/origin/$default"; then base_ref="origin/$default"
+elif git show-ref --verify --quiet "refs/heads/$default"; then base_ref="$default"; fi
+if [ -n "$base_ref" ] && [ -n "$current" ]; then
+  echo "ahead_of_default=$(git rev-list --count "$base_ref..HEAD")"
+  echo "default_ref=$base_ref"
+fi
+
+if [ "$("$wfs/task-state" show)" = none ]; then
+  echo "task=none"
+else
+  for f in branch base summary issue tier state stash; do
+    echo "task_$f=$("$wfs/task-state" get $f)"
+  done
+  tb=$("$wfs/task-state" get branch)
+  if [ "$tb" != "$current" ]; then echo "task_matches_branch=no"; else echo "task_matches_branch=yes"; fi
+fi
+
+echo "worktree=$([ "$(cd "$(git rev-parse --git-dir)" && pwd -P)" != "$(cd "$(git rev-parse --git-common-dir)" && pwd -P)" ] && echo yes || echo no)"
+echo "stashes=$(git stash list | wc -l | tr -d ' ')"

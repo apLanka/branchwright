@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Print a hash of the exact working tree state: HEAD, the diff against HEAD
+# (staged and unstaged), and the contents of untracked, non-ignored files.
+# run-verify records it after a pass; the commit gate skips a re-run when the
+# key is unchanged.
+set -uo pipefail
+git rev-parse --git-dir >/dev/null 2>&1 || exit 2
+{
+  git rev-parse HEAD 2>/dev/null
+  git diff HEAD 2>/dev/null
+  git ls-files -o --exclude-standard -z 2>/dev/null | while IFS= read -r -d '' f; do
+    printf '%s %s\n' "$f" "$(git hash-object -- "$f" 2>/dev/null)"
+  done
+} | git hash-object --stdin

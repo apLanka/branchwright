@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Push the task branch and open its pull request. Runs only after the user
+# confirmed ("done / open the PR"), recorded as state=confirmed.
+#
+# Usage: finish-task --body-file FILE [--title TEXT] [--draft]
+# Checks: state is confirmed; on the task branch; not the default branch; no
+# uncommitted changes to tracked files (untracked files are left alone); gh authenticated; commits ahead of base; body closes the issue when task.issue is set.
+# Does: git push -u origin <branch>; gh pr create; state -> pr-open.
+# Never: force-push, merge, close the issue, delete the branch.
+# Env: GH_BIN overrides the gh executable (tests).
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+wfs="$here/../../workflow/scripts"
+gh_bin=${GH_BIN:-gh}
+
+body="" title="" draft=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --body-file) body=$2; shift 2 ;;
+    --title) title=$2; shift 2 ;;
+    --draft) draft=1; shift ;;
+    *) echo "finish-task: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$body" ] && [ -f "$body" ] || { echo "finish-task: --body-file FILE is required (write it with the pr skill)" >&2; exit 2; }
+
+fail() { echo "finish-task: $*" >&2; exit 1; }
+
+[ "$("$wfs/task-state" show)" != none ] || fail "no task.json"
+state=$("$wfs/task-state" get state)
+[ "$state" = confirmed ] || fail "state is '$state'; the user must confirm before a PR (state=confirmed)"
+
+branch=$("$wfs/task-state" get branch)
+current=$(git branch --show-current)
+[ "$current" = "$branch" ] || fail "on '$current', task branch is '$branch'"
+default=$("$wfs/default-branch")
+[ "$branch" != "$default" ] || fail "refusing to push the default branch"
+[ -z "$(git status --porcelain --untracked-files=no)" ] || fail "tracked files have uncommitted changes; commit them (atomic-commits) or stash them first"
+untracked=$(git status --porcelain --untracked-files=normal | grep -c '^??' || true)
+[ "$untracked" -eq 0 ] || echo "finish-task: note: $untracked untracked path(s) left alone (they are not part of the push)" >&2
+
+base=$("$wfs/task-state" get base)
+base_name=${base#origin/}
+git remote get-url origin >/dev/null 2>&1 || fail "no 'origin' remote"
+if git show-ref --verify --quiet "refs/remotes/origin/$base_name"; then ref="origin/$base_name"
+elif git show-ref --verify --quiet "refs/heads/$base_name"; then ref="$base_name"
+else ref="$base"; fi
+ahead=$(git rev-list --count "$ref..HEAD")
+[ "$ahead" -gt 0 ] || fail "no commits ahead of $ref"
+
+issue=$("$wfs/task-state" get issue)
+if [ -n "$issue" ]; then
+  grep -Eiq "closes #$issue([^0-9]|$)" "$body" || fail "PR body must contain 'Closes #$issue'"
+fi
+[ -n "$title" ] || title=$("$wfs/task-state" get summary)
+
+"$gh_bin" auth status >/dev/null 2>&1 || fail "gh is not authenticated; run 'gh auth login' (nothing was pushed)"
+
+git push -u origin "$branch"
+
+args=(pr create --base "$base_name" --head "$branch" --title "$title" --body-file "$body")
+[ $draft -eq 1 ] && args+=(--draft)
+url=$("$gh_bin" "${args[@]}")
+"$wfs/task-state" transition pr-open
+echo "pr=$url"

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Print (and create) the directory that holds one plan's artifacts: ledger,
+# task briefs, reports, review packages.
+#
+# Usage: sdd-workspace PLAN_FILE
+# Location: <worktree>/.workflow/sdd/<plan-basename>/ (plans live in .workflow/plans/).
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+wfs="$here/../../workflow/scripts"
+[ $# -eq 1 ] || { echo "usage: sdd-workspace PLAN_FILE" >&2; exit 2; }
+plan=$1
+[ -f "$plan" ] || { echo "no such plan file: $plan" >&2; exit 2; }
+slug=$(basename "$plan" .md)
+[ -n "$slug" ] && [ "$slug" != "." ] && [ "$slug" != ".." ] || { echo "cannot derive a workspace name from: $plan" >&2; exit 2; }
+"$wfs/task-state" init
+dir="$("$wfs/task-state" root)/sdd/$slug"
+mkdir -p "$dir"
+cd "$dir" && pwd

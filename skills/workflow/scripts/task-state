@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# Read and write the workflow task state in <worktree-root>/.workflow/task.json.
+#
+# Usage: task-state <command> [args]
+#   root                      print the .workflow directory path
+#   init                      create .workflow and exclude it from git (info/exclude)
+#   show                      print task.json, or "none"
+#   get <field>               print one field (empty if null)
+#   set key=value ...         update fields (state and tier follow the rules below)
+#   start --branch B --base X --summary S --tier N [--issue N]
+#                             write a fresh task.json (archives any task on another branch)
+#   transition <state>        working -> ready -> confirmed -> pr-open (ready -> working allowed)
+#   archive                   move task.json to .workflow/tasks/<branch>.json
+#   restore <branch>          move .workflow/tasks/<branch>.json back to task.json
+#
+# Fields: branch, base, summary, issue, tier, state, stash
+# Rules: tier only moves up; state moves only along the machine above.
+set -euo pipefail
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "task-state: not inside a git repository" >&2; exit 2; }
+wf="$top/.workflow"
+
+cmd=${1:-}
+[ -n "$cmd" ] || { sed -n '2,17p' "$0" >&2; exit 2; }
+shift
+
+if [ "$cmd" = root ]; then echo "$wf"; exit 0; fi
+
+if [ "$cmd" = init ]; then
+  mkdir -p "$wf"
+  excl=$(git rev-parse --git-path info/exclude)
+  case "$excl" in /*) ;; *) excl="$top/$excl" ;; esac
+  mkdir -p "$(dirname "$excl")"
+  touch "$excl"
+  grep -qxF '.workflow/' "$excl" || printf '.workflow/\n' >> "$excl"
+  exit 0
+fi
+
+mkdir -p "$wf"
+export WF="$wf"
+exec python3 - "$cmd" "$@" <<'PY'
+import json, os, re, sys
+
+wf = os.environ["WF"]
+path = os.path.join(wf, "task.json")
+tasks = os.path.join(wf, "tasks")
+FIELDS = ["branch", "base", "summary", "issue", "tier", "state", "stash"]
+NEXT = {
+    "working": {"ready"},
+    "ready": {"confirmed", "working"},
+    "confirmed": {"pr-open", "working"},
+    "pr-open": set(),
+}
+
+def die(msg, code=1):
+    print("task-state: " + msg, file=sys.stderr)
+    sys.exit(code)
+
+def slug(branch):
+    return branch.replace("/", "__")
+
+def load():
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+def save(t):
+    ordered = {k: t.get(k) for k in FIELDS}
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(ordered, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+
+def archive():
+    t = load()
+    if t is None:
+        return
+    os.makedirs(tasks, exist_ok=True)
+    os.replace(path, os.path.join(tasks, slug(t["branch"]) + ".json"))
+
+def coerce(key, val):
+    if key == "tier":
+        if not re.fullmatch(r"[0-3]", val):
+            die("tier must be 0, 1, 2 or 3")
+        return int(val)
+    if key == "issue":
+        return None if val in ("", "null") else int(val)
+    if key == "stash":
+        return None if val in ("", "null") else val
+    return val
+
+def check_state(old, new):
+    if new not in NEXT:
+        die("unknown state: " + new)
+    if old == new:
+        return
+    if new not in NEXT[old]:
+        die("illegal state change %s -> %s" % (old, new))
+
+cmd, args = sys.argv[1], sys.argv[2:]
+
+if cmd == "show":
+    t = load()
+    print("none" if t is None else json.dumps(t, indent=2))
+elif cmd == "get":
+    if len(args) != 1 or args[0] not in FIELDS:
+        die("get <" + "|".join(FIELDS) + ">")
+    t = load()
+    if t is None:
+        sys.exit(1)
+    v = t.get(args[0])
+    print("" if v is None else v)
+elif cmd == "set":
+    t = load()
+    if t is None:
+        die("no task.json; run start first")
+    for a in args:
+        if "=" not in a:
+            die("expected key=value, got " + a)
+        k, v = a.split("=", 1)
+        if k not in FIELDS:
+            die("unknown field " + k)
+        nv = coerce(k, v)
+        if k == "tier" and nv < t["tier"]:
+            die("tier only moves up (%s -> %s)" % (t["tier"], nv))
+        if k == "state":
+            check_state(t["state"], nv)
+        t[k] = nv
+    save(t)
+elif cmd == "transition":
+    if len(args) != 1:
+        die("transition <state>")
+    t = load()
+    if t is None:
+        die("no task.json; run start first")
+    check_state(t["state"], args[0])
+    t["state"] = args[0]
+    save(t)
+elif cmd == "start":
+    opts = {}
+    i = 0
+    while i < len(args):
+        if not args[i].startswith("--") or i + 1 >= len(args):
+            die("bad arguments to start")
+        opts[args[i][2:]] = args[i + 1]
+        i += 2
+    for req in ("branch", "base", "summary", "tier"):
+        if req not in opts:
+            die("start needs --" + req)
+    old = load()
+    if old is not None and old["branch"] != opts["branch"]:
+        archive()
+    t = {
+        "branch": opts["branch"],
+        "base": opts["base"],
+        "summary": opts["summary"],
+        "issue": coerce("issue", opts.get("issue", "")),
+        "tier": coerce("tier", opts["tier"]),
+        "state": "working",
+        "stash": None,
+    }
+    save(t)
+elif cmd == "archive":
+    archive()
+elif cmd == "restore":
+    if len(args) != 1:
+        die("restore <branch>")
+    src = os.path.join(tasks, slug(args[0]) + ".json")
+    if not os.path.exists(src):
+        die("no archived task for branch " + args[0])
+    if load() is not None:
+        archive()
+    os.replace(src, path)
+else:
+    die("unknown command " + cmd, 2)
+PY

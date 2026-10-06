@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Put the issue number into the task branch name once the spec issue exists.
+#
+# Usage: branch-rename --issue N [--name NEW]
+#   default NEW: "feat/add-x" -> "feat/N-add-x"; "add-x" -> "N-add-x".
+# Renames with `git branch -m` (local only, nothing pushed) and updates task.json.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+wfs="$here/../../workflow/scripts"
+
+issue="" new=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --issue) issue=$2; shift 2 ;;
+    --name) new=$2; shift 2 ;;
+    *) echo "branch-rename: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+[[ "$issue" =~ ^[0-9]+$ ]] || { echo "branch-rename: --issue N is required" >&2; exit 2; }
+
+current=$(git branch --show-current)
+[ -n "$current" ] || { echo "branch-rename: detached HEAD" >&2; exit 1; }
+if [ "$("$wfs/task-state" show)" != none ] && [ "$("$wfs/task-state" get branch)" != "$current" ]; then
+  echo "branch-rename: task.json is for $("$wfs/task-state" get branch), not $current" >&2; exit 1
+fi
+
+if [ -z "$new" ]; then
+  case "$current" in
+    */*) new="${current%%/*}/$issue-${current#*/}" ;;
+    *) new="$issue-$current" ;;
+  esac
+fi
+[ "$new" != "$current" ] || { echo "branch-rename: name unchanged: $current"; "$wfs/task-state" set "issue=$issue" 2>/dev/null || true; exit 0; }
+git check-ref-format --branch "$new" >/dev/null 2>&1 || { echo "branch-rename: invalid name $new" >&2; exit 2; }
+git show-ref --verify --quiet "refs/heads/$new" && { echo "branch-rename: $new exists" >&2; exit 1; }
+
+git branch -m "$current" "$new"
+if [ "$("$wfs/task-state" show)" != none ]; then
+  "$wfs/task-state" set "branch=$new" "issue=$issue"
+fi
+echo "branch=$new"

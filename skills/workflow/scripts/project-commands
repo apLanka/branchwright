@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Read the project's verify commands from the "Commands" table (heading level 2 to 4) in AGENTS.md.
+#
+# Usage: project-commands [purpose]
+#   no argument   print "purpose<TAB>command" for every row
+#   purpose       print that command (exit 1 when the row is missing or "-")
+#
+# Table format (written by setup-workflow):
+#   | Purpose | Command |
+#   |---|---|
+#   | test | npm test |
+# Rows whose command is "-" or empty are treated as absent.
+set -euo pipefail
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || top=$PWD
+file="$top/AGENTS.md"
+[ -f "$file" ] || { echo "project-commands: no AGENTS.md at $top" >&2; exit 2; }
+
+rows=$(awk '
+  /^##+[ \t]+Commands[ \t]*$/ { match($0, /^#+/); if (RLENGTH <= 4) { lvl = RLENGTH; on = 1; next } }
+  on && /^#+[ \t]/ { match($0, /^#+/); if (RLENGTH <= lvl) on = 0 }
+  on && /^\|/ { print }
+' "$file" | awk -F'|' '
+  {
+    p = $2; c = $3
+    gsub(/^[ \t]+|[ \t]+$/, "", p); gsub(/^[ \t]+|[ \t]+$/, "", c)
+    gsub(/^`|`$/, "", c)
+    if (tolower(p) == "purpose" || p ~ /^-+$/ || p == "") next
+    if (c == "" || c == "-") next
+    print tolower(p) "\t" c
+  }')
+
+if [ $# -eq 0 ]; then
+  [ -n "$rows" ] && printf '%s\n' "$rows"
+  exit 0
+fi
+
+want=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+cmd=$(printf '%s\n' "$rows" | awk -F'\t' -v w="$want" '$1 == w { print $2; exit }')
+[ -n "$cmd" ] || exit 1
+printf '%s\n' "$cmd"

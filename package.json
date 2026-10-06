@@ -1,0 +1,12 @@
+{
+  "name": "branchwright",
+  "version": "0.1.0",
+  "description": "Branchwright: a tiered, branch-per-task coding workflow for opencode (skills, guardrails, agents, commands)",
+  "type": "module",
+  "main": ".opencode/plugins/workflow.js",
+  "license": "MIT",
+  "scripts": {
+    "validate": "node tools/validate-skills.mjs --complete",
+    "test": "bash tests/spine.test.sh && bash tests/review-package.test.sh && bash tests/sdd.test.sh && node --test tests/plugin.test.mjs"
+  }
+}
