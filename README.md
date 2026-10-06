@@ -7,6 +7,7 @@ It ships 47 skills, guardrails that enforce the rules instead of asking nicely, 
 Built for TypeScript and Python projects, one model, GitHub through `gh`.
 
 - [Quick start](#quick-start)
+- [How to use it](#how-to-use-it)
 - [How a task runs](#how-a-task-runs)
 - [Tiers](#tiers)
 - [Task states and who decides](#task-states-and-who-decides)
@@ -37,6 +38,119 @@ Restart opencode in that project, then say:
 The agent reads your repo, writes the test, typecheck and lint commands into `AGENTS.md`, creates the GitHub docs under `docs/agents/`, creates the `ready-for-agent` label, and git-excludes the `.workflow/` state folder. That is the whole setup. From then on, just describe what you want:
 
 > Create a referral code system for this website.
+
+## How to use it
+
+You talk to the agent normally. Branchwright decides how much process the request needs, and the agent only stops for you at a few fixed points. Your job is small: describe what you want, answer the questions it asks, approve the spec, and say "done" when you are satisfied.
+
+### The four things you do
+
+| When | What you do | What to say |
+|---|---|---|
+| Starting | describe the work in plain words | "Add a dark mode toggle." / "Login fails when the email has a plus sign." |
+| The agent asks questions (features) | answer the decisions; say "your call" for any you don't care about | "Codes expire after 30 days. Self-referral is not allowed. Your call on the rest." |
+| The agent publishes the spec | read the issue, then approve or ask for changes | "Approved." / "Change: reward is 10 credits, not 5." |
+| The agent reports `ready` | look at the result, then confirm | "Done, open the PR." / `/done` |
+
+Everything between those points runs without you.
+
+### Words that matter
+
+Two of your messages are special, because the guardrails read them:
+
+- **Approving the spec.** Any clear approval works ("approved", "go ahead"). Until you approve, the agent builds nothing.
+- **Confirming the task.** Say "done", "open the PR", "ship it", "lgtm", "looks good" or "confirmed", or use `/done`. A message like "thanks" or "ok" does **not** confirm. The check is a plain keyword match on your latest message, so while a task is `ready` avoid using those words in other senses ("not done yet" would count as "done"). If you are unsure, use `/done`: it always counts.
+
+### Example 1: a feature
+
+The conversations below are illustrative: the real wording varies, and a real site will produce more questions and a longer build.
+
+> **You:** Create a referral code system for this website.
+>
+> **Agent:** Tier 2: referral code system. *(creates a branch and a worktree, reads your signup and user code)*
+> Round 1 of questions:
+> Q1 – Who gets a code: every user at signup, or on request? *Recommended: every user at signup.*
+> Q2 – What does a successful referral earn, and who receives it? *Recommended: the referrer, a fixed credit.*
+> Q3 – Do codes expire or have limits? ...
+>
+> **You:** Q1 signup. Q2 referrer gets 10 credits. Q3 no expiry, max 50 uses. Self-referral not allowed.
+>
+> **Agent:** *(asks any follow-ups the answers raised, then writes the spec)* Spec published: issue #12. Branch renamed to `feat/12-referral-codes`. Summary: problem, solution, the test points, boundaries, success criteria, two open questions with defaults. Approve, or tell me what to change.
+>
+> **You:** Approved.
+>
+> **Agent:** *(plans, builds task by task, reviews, verifies)* Ready. Built the code model, the signup hook and the redemption endpoint; 31 tests pass, typecheck and lint clean. Rulings I made: (1) code format is 8 uppercase characters; (2) redeeming a used-up code returns 409. Nothing is pushed. Say "done" to open the PR.
+>
+> **You:** Done, open the PR.
+>
+> **Agent:** PR opened: github.com/you/site/pull/13 (`Closes #12`).
+
+Then you review the PR on GitHub, merge it, and the issue closes.
+
+### Example 2: a bug
+
+> **You:** Checkout crashes when the cart has an item with no price.
+>
+> **Agent:** Tier 1: bug in checkout. *(new branch `fix/checkout-missing-price`)* Reproduced it with a failing test: a cart with a priceless item raises `TypeError`. Cause: `total()` assumes every item has a price. Fixed at the source, not with a try/except; the test passes, the suite is green. Committed as `fix(checkout): handle items without a price`. Ready, nothing pushed.
+>
+> **You:** `/done`
+>
+> **Agent:** PR opened.
+
+There was no spec and no approval step: a bug is small enough to go straight to the fix.
+
+### Example 3: switching tasks in the middle
+
+You are halfway through a feature when you think of something else.
+
+> **You:** Unrelated, but fix the typo "recieve" in the README.
+>
+> **Agent:** Tier 0: README typo. This is not part of the referral work, so I'm starting a new branch from `main` and stashing your half-done changes as `feat/12-referral-codes: ...`. *(fixes, commits, `ready`)*
+>
+> **You:** Good, now go back to the referral work.
+>
+> **Agent:** *(restores the stash and the task, continues)*
+
+Your unfinished work is never lost or committed half-finished. If the earlier task was `ready` and you had not confirmed it, the agent asks once whether to leave it or confirm it first.
+
+### Example 4: a big project
+
+> **You:** We need a full subscription billing system: plans, invoices, trials, webhooks.
+
+This is Tier 3: too big for one branch. With the optional `to-tickets` skill enabled (`install.sh --enable to-tickets`), the agent writes a capability map for you to approve (billing plans, invoices, trials, webhooks, and their build order), publishes one spec per part, splits each into tickets on GitHub, and then runs each ticket as its own Tier 2 task on its own branch and PR. Use `/next` to pick up the next ticket, and `handoff` when a session gets long. (The Tier 3 flow has not been run by an agent yet; see [Status and limits](#status-and-limits).) For a vague, foggy idea ("rebuild our onboarding"), enable `wayfinder` as well.
+
+### Everyday phrases
+
+| You want | Say |
+|---|---|
+| start something without building yet | `/task <request>` |
+| only the spec, no build | `/spec <idea>` |
+| see where things stand | "What's the status?" or `/next` |
+| a more careful review | "Review this as high-risk" or `/review high-risk` |
+| change the spec after approval | "Change the spec: ..." (the agent updates the issue first, then the code) |
+| fix something after `ready` | just ask; the task goes back to `working` and the agent re-verifies |
+| continue yesterday's work | "Continue where we left off" or `/next` |
+| stop without a PR | say nothing; a `ready` task is never pushed |
+| not interested in a question | "Your call" (it records the choice as a Ruling) |
+
+### Reading what the agent reports
+
+- **Tier line.** The first thing it writes. If it is too low or too high for the job, say so ("this is bigger than a bug fix") and it moves up.
+- **`Ruling:` lines.** Decisions it made for you because you were not asked. Each has a reason and a cost if wrong. Skim them: if you disagree, tell it and it reworks that part.
+- **Evidence.** Test counts and command output, not "should work". If a claim has no command output behind it, ask for it.
+- **Status.** `ready` means built, verified and reviewed, waiting for you. Check it any time with `.workflow/task.json` in the repo, or ask.
+
+### What the agent will not do
+
+It will not push before you confirm, force-push, rewrite history, stage everything with `git add -A`, skip hooks, or edit and commit on `main`. If you ask it to, it explains and tells you what to do yourself. Merging, closing issues and deleting branches are always yours.
+
+### Tips
+
+- Say what you want, not how to build it. The questions will pull out the rest.
+- For features, answer the questions in one message; the agent asks the whole open set each round.
+- Keep your test, typecheck and lint commands correct in `AGENTS.md`: the commit gate and every "verified" claim rely on them.
+- Review the PR diff before merging, as you would a colleague's. The guardrails are a safety net, not a guarantee.
+- One chat can hold several tasks, but one branch holds one task: unrelated requests get their own branch automatically.
 
 ## How a task runs
 
